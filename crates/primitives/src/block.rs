@@ -546,6 +546,7 @@ pub struct BlockHash {
 }
 
 impl BlockHash {
+    /// SPG: generates a BlockHash from H256
     pub fn from_hash(block_hash: H256, require_canonical: Option<bool>) -> Self {
         BlockHash { block_hash, require_canonical }
     }
