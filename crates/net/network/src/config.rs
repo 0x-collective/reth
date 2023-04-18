@@ -21,7 +21,7 @@ use std::{
 /// reexports for convenience
 #[doc(hidden)]
 mod __reexport {
-    pub use secp256k1::SecretKey;
+    pub use secp256k1::SecretKey as Secp256k1SecretKey;
 }
 pub use __reexport::*;
 use reth_dns_discovery::DnsDiscoveryConfig;

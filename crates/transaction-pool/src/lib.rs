@@ -84,18 +84,15 @@ pub use crate::{
     ordering::{CostOrdering, TransactionOrdering},
     traits::{
         BestTransactions, OnNewBlockEvent, PoolTransaction, PooledTransaction, PropagateKind,
-        PropagatedTransactions, TransactionOrigin, TransactionPool,
+        PropagatedTransactions, TransactionOrigin, TransactionPool, PoolSize, NewTransactionEvent
     },
     validate::{
         EthTransactionValidator, TransactionValidationOutcome, TransactionValidator,
         ValidPoolTransaction,
     },
+    error::{PoolError, PoolResult}
 };
-use crate::{
-    error::{PoolError, PoolResult},
-    pool::PoolInner,
-    traits::{NewTransactionEvent, PoolSize},
-};
+use crate::pool::PoolInner;
 use reth_primitives::{Address, TxHash, U256};
 use reth_provider::StateProviderFactory;
 use std::{collections::HashMap, sync::Arc};
@@ -152,7 +149,7 @@ where
     }
 
     /// Returns the wrapped pool.
-    pub(crate) fn inner(&self) -> &PoolInner<V, T> {
+    pub fn inner(&self) -> &PoolInner<V, T> {
         &self.pool
     }
 
