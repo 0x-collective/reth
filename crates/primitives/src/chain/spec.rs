@@ -42,6 +42,7 @@ pub static MAINNET: Lazy<ChainSpec> = Lazy::new(|| ChainSpec {
                 total_difficulty: U256::from(58_750_000_000_000_000_000_000_u128),
             },
         ),
+        (Hardfork::Shanghai, ForkCondition::Timestamp(1681338455)),
     ]),
 });
 
@@ -55,6 +56,13 @@ pub static GOERLI: Lazy<ChainSpec> = Lazy::new(|| ChainSpec {
     ))),
     hardforks: BTreeMap::from([
         (Hardfork::Frontier, ForkCondition::Block(0)),
+        (Hardfork::Homestead, ForkCondition::Block(0)),
+        (Hardfork::Dao, ForkCondition::Block(0)),
+        (Hardfork::Tangerine, ForkCondition::Block(0)),
+        (Hardfork::SpuriousDragon, ForkCondition::Block(0)),
+        (Hardfork::Byzantium, ForkCondition::Block(0)),
+        (Hardfork::Constantinople, ForkCondition::Block(0)),
+        (Hardfork::Petersburg, ForkCondition::Block(0)),
         (Hardfork::Istanbul, ForkCondition::Block(1561651)),
         (Hardfork::Berlin, ForkCondition::Block(4460644)),
         (Hardfork::London, ForkCondition::Block(5062605)),
@@ -62,6 +70,7 @@ pub static GOERLI: Lazy<ChainSpec> = Lazy::new(|| ChainSpec {
             Hardfork::Paris,
             ForkCondition::TTD { fork_block: None, total_difficulty: U256::from(10_790_000) },
         ),
+        (Hardfork::Shanghai, ForkCondition::Timestamp(1678832736)),
     ]),
 });
 
@@ -139,20 +148,14 @@ impl ChainSpec {
     /// Get the header for the genesis block.
     pub fn genesis_header(&self) -> Header {
         // If London is activated at genesis, we set the initial base fee as per EIP-1559.
-        let base_fee_per_gas = if self.fork(Hardfork::London).active_at_block(0) {
-            Some(EIP1559_INITIAL_BASE_FEE)
-        } else {
-            None
-        };
+        let base_fee_per_gas =
+            (self.fork(Hardfork::London).active_at_block(0)).then_some(EIP1559_INITIAL_BASE_FEE);
 
         // If shanghai is activated, initialize the header with an empty withdrawals hash, and
         // empty withdrawals list.
         let withdrawals_root =
-            if self.fork(Hardfork::Shanghai).active_at_timestamp(self.genesis.timestamp) {
-                Some(EMPTY_WITHDRAWALS)
-            } else {
-                None
-            };
+            (self.fork(Hardfork::Shanghai).active_at_timestamp(self.genesis.timestamp))
+                .then_some(EMPTY_WITHDRAWALS);
 
         Header {
             gas_limit: self.genesis.gas_limit,
@@ -191,6 +194,18 @@ impl ChainSpec {
     /// Get an iterator of all hardforks with their respective activation conditions.
     pub fn forks_iter(&self) -> impl Iterator<Item = (Hardfork, ForkCondition)> + '_ {
         self.hardforks.iter().map(|(f, b)| (*f, *b))
+    }
+
+    /// Convenience method to check if a fork is active at a given timestamp.
+    #[inline]
+    pub fn is_fork_active_at_timestamp(&self, fork: Hardfork, timestamp: u64) -> bool {
+        self.fork(fork).active_at_timestamp(timestamp)
+    }
+
+    /// Convenience method to check if [Hardfork::Shanghai] is active at a given timestamp.
+    #[inline]
+    pub fn is_shanghai_activated_at_timestamp(&self, timestamp: u64) -> bool {
+        self.is_fork_active_at_timestamp(Hardfork::Shanghai, timestamp)
     }
 
     /// Creates a [`ForkFilter`](crate::ForkFilter) for the block described by [Head].
@@ -722,7 +737,17 @@ mod tests {
                 ),
                 (
                     Head { number: 15050000, ..Default::default() },
-                    ForkId { hash: ForkHash([0xf0, 0xaf, 0xd0, 0xe3]), next: 0 },
+                    ForkId { hash: ForkHash([0xf0, 0xaf, 0xd0, 0xe3]), next: 1681338455 },
+                ),
+                // First Shanghai block
+                (
+                    Head { number: 20000000, timestamp: 1681338455, ..Default::default() },
+                    ForkId { hash: ForkHash([0xdc, 0xe9, 0x6c, 0x2d]), next: 0 },
+                ),
+                // Future Shanghai block
+                (
+                    Head { number: 20000000, timestamp: 2000000000, ..Default::default() },
+                    ForkId { hash: ForkHash([0xdc, 0xe9, 0x6c, 0x2d]), next: 0 },
                 ),
             ],
         );
@@ -738,7 +763,15 @@ mod tests {
                     ForkId { hash: ForkHash([0xa3, 0xf5, 0xab, 0x08]), next: 1561651 },
                 ),
                 (
+                    Head { number: 1561650, ..Default::default() },
+                    ForkId { hash: ForkHash([0xa3, 0xf5, 0xab, 0x08]), next: 1561651 },
+                ),
+                (
                     Head { number: 1561651, ..Default::default() },
+                    ForkId { hash: ForkHash([0xc2, 0x5e, 0xfa, 0x5c]), next: 4460644 },
+                ),
+                (
+                    Head { number: 4460643, ..Default::default() },
                     ForkId { hash: ForkHash([0xc2, 0x5e, 0xfa, 0x5c]), next: 4460644 },
                 ),
                 (
@@ -746,8 +779,22 @@ mod tests {
                     ForkId { hash: ForkHash([0x75, 0x7a, 0x1c, 0x47]), next: 5062605 },
                 ),
                 (
-                    Head { number: 12965000, ..Default::default() },
-                    ForkId { hash: ForkHash([0xb8, 0xc6, 0x29, 0x9d]), next: 0 },
+                    Head { number: 5062605, ..Default::default() },
+                    ForkId { hash: ForkHash([0xb8, 0xc6, 0x29, 0x9d]), next: 1678832736 },
+                ),
+                (
+                    Head { number: 6000000, timestamp: 1678832735, ..Default::default() },
+                    ForkId { hash: ForkHash([0xb8, 0xc6, 0x29, 0x9d]), next: 1678832736 },
+                ),
+                // First Shanghai block
+                (
+                    Head { number: 6000001, timestamp: 1678832736, ..Default::default() },
+                    ForkId { hash: ForkHash([0xf9, 0x84, 0x3a, 0xbf]), next: 0 },
+                ),
+                // Future Shanghai block
+                (
+                    Head { number: 6500000, timestamp: 1678832736, ..Default::default() },
+                    ForkId { hash: ForkHash([0xf9, 0x84, 0x3a, 0xbf]), next: 0 },
                 ),
             ],
         );
@@ -771,7 +818,11 @@ mod tests {
                     ForkId { hash: ForkHash([0xb9, 0x6c, 0xbd, 0x13]), next: 1677557088 },
                 ),
                 (
-                    Head { number: 1735372, timestamp: 1677557090, ..Default::default() },
+                    Head { number: 1735372, timestamp: 1677557087, ..Default::default() },
+                    ForkId { hash: ForkHash([0xb9, 0x6c, 0xbd, 0x13]), next: 1677557088 },
+                ),
+                (
+                    Head { number: 1735372, timestamp: 1677557088, ..Default::default() },
                     ForkId { hash: ForkHash([0xf7, 0xf9, 0xbc, 0x08]), next: 0 },
                 ),
             ],

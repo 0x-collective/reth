@@ -30,7 +30,7 @@ use discv5::{
     ConnectionDirection, ConnectionState,
 };
 use enr::{Enr, EnrBuilder};
-use proto::{EnrRequest, EnrResponse};
+use proto::{EnrRequest, EnrResponse, EnrWrapper};
 use reth_primitives::{
     bytes::{Bytes, BytesMut},
     ForkId, PeerId, H256,
@@ -56,7 +56,6 @@ use tokio::{
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 use tracing::{debug, info, trace, warn};
 
-pub mod bootnodes;
 pub mod error;
 mod proto;
 
@@ -257,6 +256,12 @@ impl Discv4 {
     /// Removes the peer from the table, if it exists.
     pub fn remove_peer(&self, node_id: PeerId) {
         let cmd = Discv4Command::Remove(node_id);
+        self.safe_send_to_service(cmd);
+    }
+
+    /// Adds the node to the table, if it is not already present.
+    pub fn add_node(&self, node_record: NodeRecord) {
+        let cmd = Discv4Command::Add(node_record);
         self.safe_send_to_service(cmd);
     }
 
@@ -486,11 +491,7 @@ impl Discv4Service {
 
     /// Returns the current enr sequence
     fn enr_seq(&self) -> Option<u64> {
-        if self.config.enable_eip868 {
-            Some(self.local_eip_868_enr.seq())
-        } else {
-            None
-        }
+        (self.config.enable_eip868).then(|| self.local_eip_868_enr.seq())
     }
 
     /// Sets the [Interval] used for periodically looking up targets over the network
@@ -562,7 +563,7 @@ impl Discv4Service {
                 &key,
                 entry,
                 NodeStatus {
-                    state: ConnectionState::Connected,
+                    state: ConnectionState::Disconnected,
                     direction: ConnectionDirection::Outgoing,
                 },
             ) {
@@ -621,7 +622,7 @@ impl Discv4Service {
     /// This takes an optional Sender through which all successfully discovered nodes are sent once
     /// the request has finished.
     fn lookup_with(&mut self, target: PeerId, tx: Option<NodeRecordSender>) {
-        trace!(target : "net::discv4", ?target, "Starting lookup");
+        trace!(target : "discv4", ?target, "Starting lookup");
         let target_key = kad_key(target);
 
         // Start a lookup context with the 16 (MAX_NODES_PER_BUCKET) closest nodes
@@ -629,7 +630,10 @@ impl Discv4Service {
             target_key.clone(),
             self.kbuckets
                 .closest_values(&target_key)
-                .filter(|node| !self.pending_find_nodes.contains_key(&node.key.preimage().0))
+                .filter(|node| {
+                    node.value.has_endpoint_proof &&
+                        !self.pending_find_nodes.contains_key(&node.key.preimage().0)
+                })
                 .take(MAX_NODES_PER_BUCKET)
                 .map(|n| (target_key.distance(&n.key), n.value.record)),
             tx,
@@ -647,7 +651,7 @@ impl Discv4Service {
             return
         }
 
-        trace!(target : "net::discv4", ?target, num = closest.len(), "Start lookup closest nodes");
+        trace!(target : "discv4", ?target, num = closest.len(), "Start lookup closest nodes");
 
         for node in closest {
             self.find_node(&node, ctx.clone());
@@ -664,11 +668,6 @@ impl Discv4Service {
         let msg = Message::FindNode(FindNode { id, expire: self.find_node_expiration() });
         self.send_packet(msg, node.udp_addr());
         self.pending_find_nodes.insert(node.id, FindNodeRequest::new(ctx));
-    }
-
-    /// Gets the number of entries that are considered connected.
-    pub fn num_connected(&self) -> usize {
-        self.kbuckets.buckets_iter().fold(0, |count, bucket| count + bucket.num_connected())
     }
 
     /// Notifies all listeners
@@ -718,6 +717,11 @@ impl Discv4Service {
         removed
     }
 
+    /// Gets the number of entries that are considered connected.
+    pub fn num_connected(&self) -> usize {
+        self.kbuckets.buckets_iter().fold(0, |count, bucket| count + bucket.num_connected())
+    }
+
     /// Update the entry on RE-ping
     ///
     /// On re-ping we check for a changed enr_seq if eip868 is enabled and when it changed we sent a
@@ -755,6 +759,7 @@ impl Discv4Service {
         };
     }
 
+    /// Callback invoked when we receive a pong from the peer.
     fn update_on_pong(&mut self, record: NodeRecord, mut last_enr_seq: Option<u64>) {
         if record.id == *self.local_peer_id() {
             return
@@ -772,7 +777,10 @@ impl Discv4Service {
         let key = kad_key(record.id);
         match self.kbuckets.entry(&key) {
             kbucket::Entry::Present(mut entry, old_status) => {
+                // endpoint is now proven
+                entry.value_mut().has_endpoint_proof = true;
                 entry.value_mut().update_with_enr(last_enr_seq);
+
                 if !old_status.is_connected() {
                     let _ = entry.update(ConnectionState::Connected, Some(old_status.direction));
                     debug!(target : "discv4",  ?record, "added after successful endpoint proof");
@@ -785,7 +793,10 @@ impl Discv4Service {
                 }
             }
             kbucket::Entry::Pending(mut entry, mut status) => {
+                // endpoint is now proven
+                entry.value().has_endpoint_proof = true;
                 entry.value().update_with_enr(last_enr_seq);
+
                 if !status.is_connected() {
                     status.state = ConnectionState::Connected;
                     let _ = entry.update(status);
@@ -1125,7 +1136,7 @@ impl Discv4Service {
             self.send_packet(
                 Message::EnrResponse(EnrResponse {
                     request_hash,
-                    enr: self.local_eip_868_enr.clone(),
+                    enr: EnrWrapper::new(self.local_eip_868_enr.clone()),
                 }),
                 remote_addr,
             );
@@ -1397,12 +1408,14 @@ impl Discv4Service {
 
             // trigger self lookup
             if self.config.enable_lookup && self.lookup_interval.poll_tick(cx).is_ready() {
+                let _ = self.lookup_interval.poll_tick(cx);
                 let target = self.lookup_rotator.next(&self.local_node_record.id);
                 self.lookup_with(target, None);
             }
 
             // re-ping some peers
             if self.ping_interval.poll_tick(cx).is_ready() {
+                let _ = self.ping_interval.poll_tick(cx);
                 self.re_ping_oldest();
             }
 
@@ -1418,6 +1431,9 @@ impl Discv4Service {
                 while let Poll::Ready(cmd) = rx.poll_recv(cx) {
                     if let Some(cmd) = cmd {
                         match cmd {
+                            Discv4Command::Add(enr) => {
+                                self.add_node(enr);
+                            }
                             Discv4Command::Lookup { node_id, tx } => {
                                 let node_id = node_id.unwrap_or(self.local_node_record.id);
                                 self.lookup_with(node_id, tx);
@@ -1611,6 +1627,7 @@ pub(crate) async fn receive_loop(udp: Arc<UdpSocket>, tx: IngressSender, local_i
 
 /// The commands sent from the frontend to the service
 enum Discv4Command {
+    Add(NodeRecord),
     SetTcpPort(u16),
     SetEIP868RLPPair { key: Vec<u8>, rlp: Bytes },
     Ban(PeerId, IpAddr),
@@ -1864,6 +1881,8 @@ struct NodeEntry {
     fork_id: Option<ForkId>,
     /// Counter for failed findNode requests
     find_node_failures: usize,
+    /// whether the endpoint of the peer is proven
+    has_endpoint_proof: bool,
 }
 
 // === impl NodeEntry ===
@@ -1877,7 +1896,15 @@ impl NodeEntry {
             last_enr_seq: None,
             fork_id: None,
             find_node_failures: 0,
+            has_endpoint_proof: false,
         }
+    }
+
+    #[cfg(test)]
+    fn new_proven(record: NodeRecord) -> Self {
+        let mut node = Self::new(record);
+        node.has_endpoint_proof = true;
+        node
     }
 
     /// Updates the last timestamp and sets the enr seq
@@ -1942,12 +1969,9 @@ pub enum DiscoveryUpdate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        bootnodes::mainnet_nodes,
-        test_utils::{create_discv4, create_discv4_with_config, rng_endpoint, rng_record},
-    };
+    use crate::test_utils::{create_discv4, create_discv4_with_config, rng_endpoint, rng_record};
     use rand::{thread_rng, Rng};
-    use reth_primitives::{hex_literal::hex, ForkHash};
+    use reth_primitives::{hex_literal::hex, mainnet_nodes, ForkHash};
     use std::{future::poll_fn, net::Ipv4Addr};
 
     #[test]
@@ -2095,7 +2119,7 @@ mod tests {
 
         let _ = service.kbuckets.insert_or_update(
             &key,
-            NodeEntry::new(record),
+            NodeEntry::new_proven(record),
             NodeStatus {
                 direction: ConnectionDirection::Incoming,
                 state: ConnectionState::Connected,
@@ -2162,7 +2186,7 @@ mod tests {
 
         let _ = service.kbuckets.insert_or_update(
             &key,
-            NodeEntry::new(record),
+            NodeEntry::new_proven(record),
             NodeStatus {
                 direction: ConnectionDirection::Incoming,
                 state: ConnectionState::Connected,
@@ -2281,11 +2305,11 @@ mod tests {
         // Since the endpoint was already proven from 1 POV it can already send a FindNode so the
         // next event is either the PONG or Find Node
         match event {
-            Discv4Event::FindNode => {
+            Discv4Event::FindNode | Discv4Event::EnrRequest => {
                 // since we support enr in the ping it may also request the enr
                 let event = poll_fn(|cx| service_2.poll(cx)).await;
                 match event {
-                    Discv4Event::EnrRequest => {
+                    Discv4Event::FindNode | Discv4Event::EnrRequest => {
                         let event = poll_fn(|cx| service_2.poll(cx)).await;
                         assert_eq!(event, Discv4Event::Pong);
                     }
@@ -2296,7 +2320,7 @@ mod tests {
                 }
             }
             Discv4Event::Pong => {}
-            _ => unreachable!(),
+            ev => unreachable!("{ev:?}"),
         }
 
         // endpoint is proven
@@ -2304,7 +2328,7 @@ mod tests {
             kbucket::Entry::Present(_entry, status) => {
                 assert!(status.is_connected());
             }
-            _ => unreachable!(),
+            ev => unreachable!("{ev:?}"),
         }
     }
 

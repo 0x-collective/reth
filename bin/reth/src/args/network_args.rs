@@ -1,12 +1,12 @@
 //! clap [Args](clap::Args) for network related arguments.
 
-use crate::dirs::{KnownPeersPath, PlatformPath};
+use crate::dirs::{KnownPeersPath, MaybePlatformPath};
 use clap::Args;
-use reth_discv4::bootnodes::mainnet_nodes;
 use reth_net_nat::NatResolver;
 use reth_network::NetworkConfigBuilder;
-use reth_primitives::{ChainSpec, NodeRecord};
+use reth_primitives::{mainnet_nodes, Chain, ChainSpec, NodeRecord};
 use reth_staged_sync::Config;
+use secp256k1::SecretKey;
 use std::{path::PathBuf, sync::Arc};
 
 /// Parameters for configuring the network more granularity via CLI
@@ -36,7 +36,7 @@ pub struct NetworkArgs {
     /// dumped to this file on node shutdown, and read on startup.
     /// Cannot be used with --no-persist-peers
     #[arg(long, value_name = "FILE", verbatim_doc_comment, default_value_t)]
-    pub peers_file: PlatformPath<KnownPeersPath>,
+    pub peers_file: MaybePlatformPath<KnownPeersPath>,
 
     /// Do not persist peers. Cannot be used with --peers-file
     #[arg(long, verbatim_doc_comment, conflicts_with = "peers_file")]
@@ -45,6 +45,10 @@ pub struct NetworkArgs {
     /// NAT resolution method.
     #[arg(long, default_value = "any")]
     pub nat: NatResolver,
+
+    /// Network listening port. default: 30303
+    #[arg(long = "port", value_name = "PORT")]
+    pub port: Option<u16>,
 }
 
 impl NetworkArgs {
@@ -54,11 +58,13 @@ impl NetworkArgs {
         &self,
         config: &Config,
         chain_spec: Arc<ChainSpec>,
+        secret_key: SecretKey,
     ) -> NetworkConfigBuilder {
-        let peers_file = (!self.no_persist_peers).then_some(&self.peers_file);
+        let chain_bootnodes = chain_spec.chain.bootnodes().unwrap_or_else(mainnet_nodes);
+
         let network_config_builder = config
-            .network_config(self.nat, peers_file.map(|f| f.as_ref().to_path_buf()))
-            .boot_nodes(self.bootnodes.clone().unwrap_or_else(mainnet_nodes))
+            .network_config(self.nat, self.persistent_peers_file(chain_spec.chain), secret_key)
+            .boot_nodes(self.bootnodes.clone().unwrap_or(chain_bootnodes))
             .chain_spec(chain_spec);
 
         self.discovery.apply_to_builder(network_config_builder)
@@ -69,11 +75,15 @@ impl NetworkArgs {
 
 impl NetworkArgs {
     /// If `no_persist_peers` is true then this returns the path to the persistent peers file
-    pub fn persistent_peers_file(&self) -> Option<PathBuf> {
+    ///
+    /// Uses the input chain to determine a chain-specific path to the known peers file.
+    pub fn persistent_peers_file(&self, chain: Chain) -> Option<PathBuf> {
         if self.no_persist_peers {
             return None
         }
-        Some(self.peers_file.clone().into())
+
+        let peers_file = self.peers_file.clone().unwrap_or_chain_default(chain);
+        Some(peers_file.into())
     }
 }
 
@@ -82,18 +92,18 @@ impl NetworkArgs {
 pub struct DiscoveryArgs {
     /// Disable the discovery service.
     #[arg(short, long)]
-    disable_discovery: bool,
+    pub disable_discovery: bool,
 
     /// Disable the DNS discovery.
     #[arg(long, conflicts_with = "disable_discovery")]
-    disable_dns_discovery: bool,
+    pub disable_dns_discovery: bool,
 
     /// Disable Discv4 discovery.
     #[arg(long, conflicts_with = "disable_discovery")]
-    disable_discv4_discovery: bool,
+    pub disable_discv4_discovery: bool,
 
-    /// The UDP port to use for P2P discovery/networking.
-    #[arg(long = "discovery.port")]
+    /// The UDP port to use for P2P discovery/networking. default: 30303
+    #[arg(long = "discovery.port", name = "discovery.port", value_name = "DISCOVERY_PORT")]
     pub port: Option<u16>,
 }
 

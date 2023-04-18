@@ -1,5 +1,5 @@
 use crate::{H256, KECCAK_EMPTY, U256};
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{Buf, Bytes};
 use fixed_hash::byteorder::{BigEndian, ReadBytesExt};
 use reth_codecs::{main_codec, Compact};
 use revm_primitives::{Bytecode as RevmBytecode, BytecodeState, JumpMap};
@@ -62,6 +62,12 @@ impl Bytecode {
         Self(RevmBytecode::new_raw(bytes))
     }
 
+    /// Create new bytecode from raw bytes and its hash.
+    pub fn new_raw_with_hash(bytes: Bytes, code_hash: H256) -> Self {
+        let revm_bytecode = unsafe { RevmBytecode::new_raw_with_hash(bytes, code_hash) };
+        Self(revm_bytecode)
+    }
+
     /// Set the hash of the inner bytecode.
     pub fn with_code_hash(mut self, code_hash: H256) -> Self {
         self.0.hash = code_hash;
@@ -78,7 +84,10 @@ impl Deref for Bytecode {
 }
 
 impl Compact for Bytecode {
-    fn to_compact(self, buf: &mut impl BufMut) -> usize {
+    fn to_compact<B>(self, buf: &mut B) -> usize
+    where
+        B: bytes::BufMut + AsMut<[u8]>,
+    {
         buf.put_u32(self.0.bytecode.len() as u32);
         buf.put_slice(self.0.bytecode.as_ref());
         let len = match self.0.state() {

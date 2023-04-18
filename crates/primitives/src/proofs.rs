@@ -1,6 +1,6 @@
 use crate::{
-    keccak256, Address, Bytes, GenesisAccount, Header, Log, Receipt, TransactionSigned, Withdrawal,
-    H256,
+    keccak256, Address, Bytes, GenesisAccount, Header, Log, ReceiptWithBloom, ReceiptWithBloomRef,
+    TransactionSigned, Withdrawal, H256,
 };
 use bytes::BytesMut;
 use hash_db::Hasher;
@@ -36,12 +36,14 @@ impl Hasher for KeccakHasher {
 /// Calculate a transaction root.
 ///
 /// `(rlp(index), encoded(tx))` pairs.
-pub fn calculate_transaction_root<'a>(
-    transactions: impl IntoIterator<Item = &'a TransactionSigned>,
-) -> H256 {
+pub fn calculate_transaction_root<I, T>(transactions: I) -> H256
+where
+    I: IntoIterator<Item = T>,
+    T: AsRef<TransactionSigned>,
+{
     ordered_trie_root::<KeccakHasher, _>(transactions.into_iter().map(|tx| {
         let mut tx_rlp = Vec::new();
-        tx.encode_inner(&mut tx_rlp, false);
+        tx.as_ref().encode_inner(&mut tx_rlp, false);
         tx_rlp
     }))
 }
@@ -58,7 +60,18 @@ pub fn calculate_withdrawals_root<'a>(
 }
 
 /// Calculates the receipt root for a header.
-pub fn calculate_receipt_root<'a>(receipts: impl Iterator<Item = &'a Receipt>) -> H256 {
+pub fn calculate_receipt_root<'a>(receipts: impl Iterator<Item = &'a ReceiptWithBloom>) -> H256 {
+    ordered_trie_root::<KeccakHasher, _>(receipts.into_iter().map(|receipt| {
+        let mut receipt_rlp = Vec::new();
+        receipt.encode_inner(&mut receipt_rlp, false);
+        receipt_rlp
+    }))
+}
+
+/// Calculates the receipt root for a header for the reference type of [ReceiptWithBloom].
+pub fn calculate_receipt_root_ref<'a>(
+    receipts: impl Iterator<Item = ReceiptWithBloomRef<'a>>,
+) -> H256 {
     ordered_trie_root::<KeccakHasher, _>(receipts.into_iter().map(|receipt| {
         let mut receipt_rlp = Vec::new();
         receipt.encode_inner(&mut receipt_rlp, false);
@@ -102,7 +115,8 @@ mod tests {
     use crate::{
         hex_literal::hex,
         proofs::{calculate_receipt_root, calculate_transaction_root, genesis_state_root},
-        Address, Block, Bloom, GenesisAccount, Log, Receipt, TxType, H160, H256, U256,
+        Address, Block, Bloom, GenesisAccount, Log, Receipt, ReceiptWithBloom, TxType, H160, H256,
+        U256,
     };
     use reth_rlp::Decodable;
 
@@ -122,12 +136,14 @@ mod tests {
     fn check_receipt_root() {
         let logs = vec![Log { address: H160::zero(), topics: vec![], data: Default::default() }];
         let bloom =  Bloom(hex!("00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"));
-        let receipt = Receipt {
-            tx_type: TxType::EIP2930,
-            success: true,
-            cumulative_gas_used: 102068,
+        let receipt = ReceiptWithBloom {
+            receipt: Receipt {
+                tx_type: TxType::EIP2930,
+                success: true,
+                cumulative_gas_used: 102068,
+                logs,
+            },
             bloom,
-            logs,
         };
         let receipt = vec![receipt];
         let root = calculate_receipt_root(receipt.iter());

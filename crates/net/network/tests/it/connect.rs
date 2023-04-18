@@ -3,7 +3,7 @@
 use ethers_core::utils::Geth;
 use ethers_providers::{Http, Middleware, Provider};
 use futures::StreamExt;
-use reth_discv4::{bootnodes::mainnet_nodes, Discv4Config};
+use reth_discv4::Discv4Config;
 use reth_eth_wire::DisconnectReason;
 use reth_interfaces::{
     p2p::headers::client::{HeadersClient, HeadersRequest},
@@ -17,7 +17,7 @@ use reth_network::{
     NetworkConfigBuilder, NetworkEvent, NetworkManager, PeersConfig,
 };
 use reth_network_api::{NetworkInfo, Peers, PeersInfo};
-use reth_primitives::{HeadersDirection, NodeRecord, PeerId};
+use reth_primitives::{mainnet_nodes, HeadersDirection, NodeRecord, PeerId};
 use reth_provider::test_utils::NoopProvider;
 use reth_transaction_pool::test_utils::testing_pool;
 use secp256k1::SecretKey;
@@ -282,7 +282,7 @@ async fn test_connect_to_trusted_peer() {
     handle.add_trusted_peer(node.id, node.tcp_addr());
 
     let h = handle.clone();
-    h.update_sync_state(SyncState::Downloading { target_block: 100 });
+    h.update_sync_state(SyncState::Syncing);
 
     task::spawn(async move {
         loop {
@@ -309,6 +309,7 @@ async fn test_connect_to_trusted_peer() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[cfg_attr(not(feature = "geth-tests"), ignore)]
 async fn test_incoming_node_id_blacklist() {
     reth_tracing::init_test_tracing();
     tokio::time::timeout(GETH_TIMEOUT, async move {
@@ -361,6 +362,7 @@ async fn test_incoming_node_id_blacklist() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial_test::serial]
+#[cfg_attr(not(feature = "geth-tests"), ignore)]
 async fn test_incoming_connect_with_single_geth() {
     reth_tracing::init_test_tracing();
     tokio::time::timeout(GETH_TIMEOUT, async move {
@@ -404,6 +406,7 @@ async fn test_incoming_connect_with_single_geth() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial_test::serial]
+#[cfg_attr(not(feature = "geth-tests"), ignore)]
 async fn test_outgoing_connect_with_single_geth() {
     reth_tracing::init_test_tracing();
     tokio::time::timeout(GETH_TIMEOUT, async move {
@@ -449,6 +452,7 @@ async fn test_outgoing_connect_with_single_geth() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial_test::serial]
+#[cfg_attr(not(feature = "geth-tests"), ignore)]
 async fn test_geth_disconnect() {
     reth_tracing::init_test_tracing();
     tokio::time::timeout(GETH_TIMEOUT, async move {

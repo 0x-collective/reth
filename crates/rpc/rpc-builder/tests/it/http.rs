@@ -68,12 +68,11 @@ where
     EthApiClient::fee_history(client, 0.into(), block_number.into(), None).await.unwrap();
     EthApiClient::balance(client, address, None).await.unwrap();
     EthApiClient::transaction_count(client, address, None).await.unwrap();
-    EthApiClient::storage_at(client, address, U256::default(), None).await.unwrap();
+    EthApiClient::storage_at(client, address, U256::default().into(), None).await.unwrap();
     EthApiClient::block_by_hash(client, hash, false).await.unwrap();
     EthApiClient::block_by_number(client, block_number, false).await.unwrap();
     EthApiClient::block_transaction_count_by_number(client, block_number).await.unwrap();
     EthApiClient::block_transaction_count_by_hash(client, hash).await.unwrap();
-    EthApiClient::get_proof(client, address, vec![], None).await.unwrap();
     EthApiClient::block_uncles_count_by_hash(client, hash).await.unwrap();
     EthApiClient::block_uncles_count_by_number(client, block_number).await.unwrap();
     EthApiClient::uncle_by_block_hash_and_index(client, hash, index).await.unwrap();
@@ -82,40 +81,37 @@ where
     EthApiClient::sign_typed_data(client, address, jsonrpsee::core::JsonValue::Null)
         .await
         .unwrap_err();
-    EthApiClient::create_access_list(client, call_request.clone(), None).await.unwrap();
     EthApiClient::transaction_by_hash(client, tx_hash).await.unwrap();
     EthApiClient::transaction_by_block_hash_and_index(client, hash, index).await.unwrap();
     EthApiClient::transaction_by_block_number_and_index(client, block_number, index).await.unwrap();
+    EthApiClient::create_access_list(client, call_request.clone(), Some(block_number.into()))
+        .await
+        .unwrap();
+    EthApiClient::estimate_gas(client, call_request.clone(), Some(block_number.into()))
+        .await
+        .unwrap();
+    EthApiClient::call(client, call_request.clone(), Some(block_number.into()), None)
+        .await
+        .unwrap();
+    EthApiClient::syncing(client).await.unwrap();
+    EthApiClient::send_transaction(client, transaction_request).await.unwrap_err();
+    EthApiClient::hashrate(client).await.unwrap();
+    EthApiClient::submit_hashrate(client, U256::default(), H256::default()).await.unwrap();
 
     // Unimplemented
-    assert!(is_unimplemented(EthApiClient::syncing(client).await.err().unwrap()));
+    assert!(is_unimplemented(
+        EthApiClient::get_proof(client, address, vec![], None).await.err().unwrap()
+    ));
     assert!(is_unimplemented(EthApiClient::author(client).await.err().unwrap()));
-    assert!(is_unimplemented(EthApiClient::transaction_receipt(client, hash).await.err().unwrap()));
-    assert!(is_unimplemented(
-        EthApiClient::call(client, call_request.clone(), None, None).await.err().unwrap()
-    ));
-    assert!(is_unimplemented(
-        EthApiClient::estimate_gas(client, call_request.clone(), None).await.err().unwrap()
-    ));
     assert!(is_unimplemented(EthApiClient::gas_price(client).await.err().unwrap()));
     assert!(is_unimplemented(EthApiClient::max_priority_fee_per_gas(client).await.err().unwrap()));
     assert!(is_unimplemented(EthApiClient::is_mining(client).await.err().unwrap()));
-    assert!(is_unimplemented(EthApiClient::hashrate(client).await.err().unwrap()));
     assert!(is_unimplemented(EthApiClient::get_work(client).await.err().unwrap()));
-    assert!(is_unimplemented(
-        EthApiClient::submit_hashrate(client, U256::default(), H256::default())
-            .await
-            .err()
-            .unwrap()
-    ));
     assert!(is_unimplemented(
         EthApiClient::submit_work(client, H64::default(), H256::default(), H256::default())
             .await
             .err()
             .unwrap()
-    ));
-    assert!(is_unimplemented(
-        EthApiClient::send_transaction(client, transaction_request).await.err().unwrap()
     ));
     assert!(is_unimplemented(
         EthApiClient::sign_transaction(client, call_request.clone()).await.err().unwrap()
@@ -128,12 +124,10 @@ where
 {
     let block_id = BlockId::Number(BlockNumberOrTag::default());
 
-    assert!(is_unimplemented(DebugApiClient::raw_header(client, block_id).await.err().unwrap()));
-    assert!(is_unimplemented(DebugApiClient::raw_block(client, block_id).await.err().unwrap()));
-    assert!(is_unimplemented(
-        DebugApiClient::raw_transaction(client, H256::default()).await.err().unwrap()
-    ));
-    assert!(is_unimplemented(DebugApiClient::raw_receipts(client, block_id).await.err().unwrap()));
+    DebugApiClient::raw_header(client, block_id).await.unwrap();
+    DebugApiClient::raw_block(client, block_id).await.unwrap();
+    DebugApiClient::raw_transaction(client, H256::default()).await.unwrap();
+    DebugApiClient::raw_receipts(client, block_id).await.unwrap();
     assert!(is_unimplemented(DebugApiClient::bad_blocks(client).await.err().unwrap()));
 }
 
@@ -160,34 +154,20 @@ where
         count: None,
     };
 
-    assert!(is_unimplemented(
-        TraceApiClient::trace_call(client, CallRequest::default(), HashSet::default(), None)
-            .await
-            .err()
-            .unwrap()
-    ));
-    assert!(is_unimplemented(
-        TraceApiClient::trace_call_many(client, vec![], None).await.err().unwrap()
-    ));
-    assert!(is_unimplemented(
-        TraceApiClient::trace_raw_transaction(client, Bytes::default(), HashSet::default(), None)
-            .await
-            .err()
-            .unwrap()
-    ));
-    assert!(is_unimplemented(
-        TraceApiClient::replay_block_transactions(client, block_id, HashSet::default())
-            .await
-            .err()
-            .unwrap()
-    ));
-    assert!(is_unimplemented(
-        TraceApiClient::replay_transaction(client, H256::default(), HashSet::default())
-            .await
-            .err()
-            .unwrap()
-    ));
-    assert!(is_unimplemented(TraceApiClient::trace_block(client, block_id).await.err().unwrap()));
+    TraceApiClient::trace_raw_transaction(client, Bytes::default(), HashSet::default(), None)
+        .await
+        .unwrap_err();
+    TraceApiClient::trace_call_many(client, vec![], None).await.err().unwrap();
+    TraceApiClient::replay_transaction(client, H256::default(), HashSet::default())
+        .await
+        .err()
+        .unwrap();
+    TraceApiClient::trace_block(client, block_id).await.err().unwrap();
+    TraceApiClient::replay_block_transactions(client, block_id, HashSet::default())
+        .await
+        .err()
+        .unwrap();
+
     assert!(is_unimplemented(
         TraceApiClient::trace_filter(client, trace_filter).await.err().unwrap()
     ));

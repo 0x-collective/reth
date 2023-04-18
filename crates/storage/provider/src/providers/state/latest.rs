@@ -1,6 +1,6 @@
 use crate::{
-    providers::state::macros::delegate_provider_impls, trie::DBTrieLoader, AccountProvider,
-    BlockHashProvider, StateProvider,
+    providers::state::macros::delegate_provider_impls, AccountProvider, BlockHashProvider,
+    StateProvider,
 };
 use reth_db::{
     cursor::{DbCursorRO, DbDupCursorRO},
@@ -9,8 +9,7 @@ use reth_db::{
 };
 use reth_interfaces::{provider::ProviderError, Result};
 use reth_primitives::{
-    keccak256, Account, Address, Bytecode, Bytes, StorageKey, StorageValue, H256, KECCAK_EMPTY,
-    U256,
+    keccak256, Account, Address, BlockNumber, Bytecode, Bytes, StorageKey, StorageValue, H256,
 };
 use std::marker::PhantomData;
 
@@ -38,8 +37,21 @@ impl<'a, 'b, TX: DbTx<'a>> AccountProvider for LatestStateProviderRef<'a, 'b, TX
 
 impl<'a, 'b, TX: DbTx<'a>> BlockHashProvider for LatestStateProviderRef<'a, 'b, TX> {
     /// Get block hash by number.
-    fn block_hash(&self, number: U256) -> Result<Option<H256>> {
-        self.db.get::<tables::CanonicalHeaders>(number.to::<u64>()).map_err(Into::into)
+    fn block_hash(&self, number: u64) -> Result<Option<H256>> {
+        self.db.get::<tables::CanonicalHeaders>(number).map_err(Into::into)
+    }
+
+    fn canonical_hashes_range(&self, start: BlockNumber, end: BlockNumber) -> Result<Vec<H256>> {
+        let range = start..end;
+        self.db
+            .cursor_read::<tables::CanonicalHeaders>()
+            .map(|mut cursor| {
+                cursor
+                    .walk_range(range)?
+                    .map(|result| result.map(|(_, hash)| hash).map_err(Into::into))
+                    .collect::<Result<Vec<_>>>()
+            })?
+            .map_err(Into::into)
     }
 }
 
@@ -63,11 +75,10 @@ impl<'a, 'b, TX: DbTx<'a>> StateProvider for LatestStateProviderRef<'a, 'b, TX> 
     fn proof(
         &self,
         address: Address,
-        keys: &[H256],
+        _keys: &[H256],
     ) -> Result<(Vec<Bytes>, H256, Vec<Vec<Bytes>>)> {
-        let hashed_address = keccak256(address);
-        let loader = DBTrieLoader::new(self.db);
-        let root = self
+        let _hashed_address = keccak256(address);
+        let _root = self
             .db
             .cursor_read::<tables::Headers>()?
             .last()?
@@ -75,25 +86,7 @@ impl<'a, 'b, TX: DbTx<'a>> StateProvider for LatestStateProviderRef<'a, 'b, TX> 
             .1
             .state_root;
 
-        let (account_proof, storage_root) = loader
-            .generate_acount_proof(root, hashed_address)
-            .map_err(|_| ProviderError::StateTrie)?;
-        let account_proof = account_proof.into_iter().map(Bytes::from).collect();
-
-        let storage_proof = if storage_root == KECCAK_EMPTY {
-            // if there isn't storage, we return empty storage proofs
-            (0..keys.len()).map(|_| Vec::new()).collect()
-        } else {
-            let hashed_keys: Vec<H256> = keys.iter().map(keccak256).collect();
-            loader
-                .generate_storage_proofs(storage_root, hashed_address, &hashed_keys)
-                .map_err(|_| ProviderError::StateTrie)?
-                .into_iter()
-                .map(|v| v.into_iter().map(Bytes::from).collect())
-                .collect()
-        };
-
-        Ok((account_proof, storage_root, storage_proof))
+        unimplemented!()
     }
 }
 
