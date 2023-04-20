@@ -39,6 +39,8 @@ pub enum Hardfork {
     Paris,
     /// Shanghai.
     Shanghai,
+    /// Primordial Pulse
+    PrimordialPulse,
 }
 
 impl Hardfork {
