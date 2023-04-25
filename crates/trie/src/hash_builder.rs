@@ -5,17 +5,10 @@ use crate::{
 use reth_primitives::{
     keccak256,
     proofs::EMPTY_ROOT,
-    trie::{BranchNodeCompact, TrieMask},
+    trie::{BranchNodeCompact, HashBuilderState, HashBuilderValue, TrieMask},
     H256,
 };
-use std::{fmt::Debug, sync::mpsc};
-
-mod value;
-use value::HashBuilderValue;
-
-/// A type alias for a sender of branch nodes.
-/// Branch nodes are sent by the Hash Builder to be stored in the database.
-pub type BranchNodeSender = mpsc::Sender<(Nibbles, BranchNodeCompact)>;
+use std::{collections::HashMap, fmt::Debug};
 
 /// A component used to construct the root hash of the trie. The primary purpose of a Hash Builder
 /// is to build the Merkle proof that is essential for verifying the integrity and authenticity of
@@ -40,7 +33,7 @@ pub type BranchNodeSender = mpsc::Sender<(Nibbles, BranchNodeCompact)>;
 /// up, combining the hashes of child nodes and ultimately generating the root hash. The root hash
 /// can then be used to verify the integrity and authenticity of the trie's data by constructing and
 /// verifying Merkle proofs.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct HashBuilder {
     key: Nibbles,
     stack: Vec<Vec<u8>>,
@@ -52,19 +45,69 @@ pub struct HashBuilder {
 
     stored_in_database: bool,
 
-    branch_node_sender: Option<BranchNodeSender>,
+    updated_branch_nodes: Option<HashMap<Nibbles, BranchNodeCompact>>,
+
+    rlp_buf: Vec<u8>,
+}
+
+impl From<HashBuilderState> for HashBuilder {
+    fn from(state: HashBuilderState) -> Self {
+        Self {
+            key: Nibbles::from(state.key),
+            stack: state.stack,
+            value: state.value,
+            groups: state.groups,
+            tree_masks: state.tree_masks,
+            hash_masks: state.hash_masks,
+            stored_in_database: state.stored_in_database,
+            updated_branch_nodes: None,
+            rlp_buf: Vec::with_capacity(32),
+        }
+    }
+}
+
+impl From<HashBuilder> for HashBuilderState {
+    fn from(state: HashBuilder) -> Self {
+        Self {
+            key: state.key.hex_data,
+            stack: state.stack,
+            value: state.value,
+            groups: state.groups,
+            tree_masks: state.tree_masks,
+            hash_masks: state.hash_masks,
+            stored_in_database: state.stored_in_database,
+        }
+    }
 }
 
 impl HashBuilder {
-    /// Creates a new instance of the Hash Builder.
-    pub fn new(store_tx: Option<BranchNodeSender>) -> Self {
-        Self { branch_node_sender: store_tx, ..Default::default() }
+    /// Enables the Hash Builder to store updated branch nodes.
+    ///
+    /// Call [HashBuilder::split] to get the updates to branch nodes.
+    pub fn with_updates(mut self, retain_updates: bool) -> Self {
+        self.set_updates(retain_updates);
+        self
     }
 
-    /// Set a branch node sender on the Hash Builder instance.
-    pub fn with_branch_node_sender(mut self, tx: BranchNodeSender) -> Self {
-        self.branch_node_sender = Some(tx);
-        self
+    /// Enables the Hash Builder to store updated branch nodes.
+    ///
+    /// Call [HashBuilder::split] to get the updates to branch nodes.
+    pub fn set_updates(&mut self, retain_updates: bool) {
+        if retain_updates {
+            self.updated_branch_nodes = Some(HashMap::default());
+        }
+    }
+
+    /// Splits the [HashBuilder] into a [HashBuilder] and hash builder updates.
+    pub fn split(mut self) -> (Self, HashMap<Nibbles, BranchNodeCompact>) {
+        let updates = self.updated_branch_nodes.take();
+        (self, updates.unwrap_or_default())
+    }
+
+    /// The number of total updates accrued.
+    /// Returns `0` if [Self::with_updates] was not called.
+    pub fn updates_len(&self) -> usize {
+        self.updated_branch_nodes.as_ref().map(|u| u.len()).unwrap_or(0)
     }
 
     /// Print the current stack of the Hash Builder.
@@ -201,8 +244,13 @@ impl HashBuilder {
                     HashBuilderValue::Bytes(leaf_value) => {
                         let leaf_node = LeafNode::new(&short_node_key, leaf_value);
                         tracing::debug!(target: "trie::hash_builder", ?leaf_node, "pushing leaf node");
-                        tracing::trace!(target: "trie::hash_builder", rlp = hex::encode(&leaf_node.rlp()), "leaf node rlp");
-                        self.stack.push(leaf_node.rlp());
+                        tracing::trace!(target: "trie::hash_builder", rlp = {
+                            self.rlp_buf.clear();
+                            hex::encode(&leaf_node.rlp(&mut self.rlp_buf))
+                        }, "leaf node rlp");
+
+                        self.rlp_buf.clear();
+                        self.stack.push(leaf_node.rlp(&mut self.rlp_buf));
                     }
                     HashBuilderValue::Hash(hash) => {
                         tracing::debug!(target: "trie::hash_builder", ?hash, "pushing branch node hash");
@@ -226,8 +274,12 @@ impl HashBuilder {
                     self.stack.pop().expect("there should be at least one stack item; qed");
                 let extension_node = ExtensionNode::new(&short_node_key, &stack_last);
                 tracing::debug!(target: "trie::hash_builder", ?extension_node, "pushing extension node");
-                tracing::trace!(target: "trie::hash_builder", rlp = hex::encode(&extension_node.rlp()), "extension node rlp");
-                self.stack.push(extension_node.rlp());
+                tracing::trace!(target: "trie::hash_builder", rlp = {
+                    self.rlp_buf.clear();
+                    hex::encode(&extension_node.rlp(&mut self.rlp_buf))
+                }, "extension node rlp");
+                self.rlp_buf.clear();
+                self.stack.push(extension_node.rlp(&mut self.rlp_buf));
                 self.resize_masks(len_from);
             }
 
@@ -275,7 +327,9 @@ impl HashBuilder {
         let hash_mask = self.hash_masks[len];
         let branch_node = BranchNode::new(&self.stack);
         let children = branch_node.children(state_mask, hash_mask).collect();
-        let rlp = branch_node.rlp(state_mask);
+
+        self.rlp_buf.clear();
+        let rlp = branch_node.rlp(state_mask, &mut self.rlp_buf);
 
         // Clears the stack from the branch node elements
         let first_child_idx = self.stack.len() - state_mask.count_ones() as usize;
@@ -326,8 +380,8 @@ impl HashBuilder {
             // other side of the HashBuilder
             tracing::debug!(target: "trie::hash_builder", node = ?n, "intermediate node");
             let common_prefix = current.slice(0, len);
-            if let Some(tx) = &self.branch_node_sender {
-                let _ = tx.send((common_prefix, n));
+            if let Some(nodes) = self.updated_branch_nodes.as_mut() {
+                nodes.insert(common_prefix, n);
             }
         }
     }
@@ -429,8 +483,7 @@ mod tests {
 
     #[test]
     fn test_generates_branch_node() {
-        let (sender, recv) = mpsc::channel();
-        let mut hb = HashBuilder::new(Some(sender));
+        let mut hb = HashBuilder::default().with_updates(true);
 
         // We have 1 branch node update to be stored at 0x01, indicated by the first nibble.
         // That branch root node has 2 branch node children present at 0x1 and 0x2.
@@ -477,11 +530,9 @@ mod tests {
             hb.add_leaf(nibbles, val.as_ref());
         });
         let root = hb.root();
-        drop(hb);
 
-        let updates = recv.iter().collect::<Vec<_>>();
+        let (_, updates) = hb.split();
 
-        let updates = updates.iter().cloned().collect::<BTreeMap<_, _>>();
         let update = updates.get(&Nibbles::from(hex!("01").as_slice())).unwrap();
         assert_eq!(update.state_mask, TrieMask::new(0b1111)); // 1st nibble: 0, 1, 2, 3
         assert_eq!(update.tree_mask, TrieMask::new(0));

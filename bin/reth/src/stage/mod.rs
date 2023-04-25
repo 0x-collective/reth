@@ -2,9 +2,9 @@
 //!
 //! Stage debugging tool
 use crate::{
-    args::{get_secret_key, NetworkArgs},
+    args::{get_secret_key, NetworkArgs, StageEnum},
     dirs::{ConfigPath, DbPath, MaybePlatformPath, PlatformPath, SecretKeyPath},
-    prometheus_exporter, StageEnum,
+    prometheus_exporter,
 };
 use clap::Parser;
 use reth_beacon_consensus::BeaconConsensus;
@@ -16,7 +16,7 @@ use reth_staged_sync::{
     Config,
 };
 use reth_stages::{
-    stages::{BodyStage, ExecutionStage, SenderRecoveryStage, TransactionLookupStage},
+    stages::{BodyStage, ExecutionStage, MerkleStage, SenderRecoveryStage, TransactionLookupStage},
     ExecInput, Stage, StageId, UnwindInput,
 };
 use std::{net::SocketAddr, sync::Arc};
@@ -185,6 +185,16 @@ impl Command {
             }
             StageEnum::TxLookup => {
                 let mut stage = TransactionLookupStage::new(num_blocks);
+
+                // Unwind first
+                if !self.skip_unwind {
+                    stage.unwind(&mut tx, unwind).await?;
+                }
+
+                stage.execute(&mut tx, input).await?;
+            }
+            StageEnum::Merkle => {
+                let mut stage = MerkleStage::default_execution();
 
                 // Unwind first
                 if !self.skip_unwind {

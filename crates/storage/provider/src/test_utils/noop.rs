@@ -197,7 +197,11 @@ impl StateProviderFactory for NoopProvider {
         Ok(Box::new(*self))
     }
 
-    fn pending<'a>(
+    fn pending(&self) -> Result<StateProviderBox<'_>> {
+        Ok(Box::new(*self))
+    }
+
+    fn pending_with_provider<'a>(
         &'a self,
         _post_state_data: Box<dyn crate::PostStateDataProvider + 'a>,
     ) -> Result<StateProviderBox<'a>> {

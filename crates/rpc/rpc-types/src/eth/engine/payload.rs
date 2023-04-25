@@ -403,7 +403,7 @@ mod tests {
         SealedBlock {
             header: transformed.header.seal_slow(),
             body: transformed.body,
-            ommers: transformed.ommers.into_iter().map(Header::seal_slow).collect(),
+            ommers: transformed.ommers,
             withdrawals: transformed.withdrawals,
         }
         .into()
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn payload_body_roundtrip() {
-        for block in random_block_range(0..100, H256::default(), 0..2) {
+        for block in random_block_range(0..=99, H256::default(), 0..2) {
             let unsealed = block.clone().unseal();
             let payload_body: ExecutionPayloadBody = unsealed.into();
 

@@ -152,7 +152,7 @@ impl TransactionsProvider for MockEthProvider {
             .blocks
             .lock()
             .iter()
-            .find_map(|(_, block)| block.body.iter().find(|tx| tx.hash == hash).cloned()))
+            .find_map(|(_, block)| block.body.iter().find(|tx| tx.hash() == hash).cloned()))
     }
 
     fn transaction_by_hash_with_meta(
@@ -339,10 +339,7 @@ impl StateProviderFactory for MockEthProvider {
         Ok(Box::new(self.clone()))
     }
 
-    fn history_by_block_number(
-        &self,
-        _block: reth_primitives::BlockNumber,
-    ) -> Result<StateProviderBox<'_>> {
+    fn history_by_block_number(&self, _block: BlockNumber) -> Result<StateProviderBox<'_>> {
         todo!()
     }
 
@@ -350,7 +347,11 @@ impl StateProviderFactory for MockEthProvider {
         todo!()
     }
 
-    fn pending<'a>(
+    fn pending(&self) -> Result<StateProviderBox<'_>> {
+        todo!()
+    }
+
+    fn pending_with_provider<'a>(
         &'a self,
         _post_state_data: Box<dyn PostStateDataProvider + 'a>,
     ) -> Result<StateProviderBox<'a>> {
@@ -363,10 +364,7 @@ impl StateProviderFactory for Arc<MockEthProvider> {
         Ok(Box::new(self.clone()))
     }
 
-    fn history_by_block_number(
-        &self,
-        _block: reth_primitives::BlockNumber,
-    ) -> Result<StateProviderBox<'_>> {
+    fn history_by_block_number(&self, _block: BlockNumber) -> Result<StateProviderBox<'_>> {
         todo!()
     }
 
@@ -374,7 +372,11 @@ impl StateProviderFactory for Arc<MockEthProvider> {
         todo!()
     }
 
-    fn pending<'a>(
+    fn pending(&self) -> Result<StateProviderBox<'_>> {
+        todo!()
+    }
+
+    fn pending_with_provider<'a>(
         &'a self,
         _post_state_data: Box<dyn PostStateDataProvider + 'a>,
     ) -> Result<StateProviderBox<'a>> {

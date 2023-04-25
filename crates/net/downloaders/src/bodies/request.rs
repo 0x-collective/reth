@@ -165,7 +165,7 @@ where
                 let block = SealedBlock {
                     header: next_header,
                     body: next_body.transactions,
-                    ommers: next_body.ommers.into_iter().map(|h| h.seal_slow()).collect(),
+                    ommers: next_body.ommers,
                     withdrawals: next_body.withdrawals,
                 };
 
@@ -266,7 +266,7 @@ mod tests {
     #[tokio::test]
     async fn request_submits_until_fulfilled() {
         // Generate some random blocks
-        let (headers, mut bodies) = generate_bodies(0..20);
+        let (headers, mut bodies) = generate_bodies(0..=19);
 
         let batch_size = 2;
         let client = Arc::new(
