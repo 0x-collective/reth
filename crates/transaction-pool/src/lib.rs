@@ -85,7 +85,7 @@ pub use crate::{
     traits::{
         BestTransactions, BlockInfo, CanonicalStateUpdate, ChangedAccount, PoolTransaction,
         PooledTransaction, PropagateKind, PropagatedTransactions, TransactionOrigin,
-        TransactionPool,
+        TransactionPool, NewTransactionEvent
     },
     validate::{
         EthTransactionValidator, TransactionValidationOutcome, TransactionValidator,
@@ -95,7 +95,7 @@ pub use crate::{
 };
 use crate::{
     pool::PoolInner,
-    traits::{NewTransactionEvent, PoolSize},
+    traits::PoolSize,
 };
 use reth_primitives::{Address, TxHash, U256};
 use reth_provider::StateProviderFactory;

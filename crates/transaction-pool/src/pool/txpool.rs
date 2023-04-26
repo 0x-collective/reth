@@ -202,6 +202,24 @@ impl<T: TransactionOrdering> TxPool<T> {
         }
     }
 
+    /// custom function to allow removing mined txs from the txpool
+    pub fn canon_state_change(&mut self, event: CanonicalStateUpdate) -> () {
+        // Remove all transaction that were included in the block
+        for tx_hash in &event.mined_transactions {
+            if self.remove_transaction_by_hash(tx_hash).is_some() {
+                // Update removed transactions metric
+                self.metrics.removed_transactions.increment(1);
+            }
+        }
+
+        // Apply the state changes to the total set of transactions which triggers sub-pool updates.
+        let updates =
+            self.all_transactions.update(event.pending_block_base_fee, &event.changed_accounts);
+
+        // Process the sub-pool updates
+        self.process_updates(updates);
+    }
+
     /// Adds the transaction into the pool.
     ///
     /// This pool consists of two three-pools: `Queued`, `Pending` and `BaseFee`.

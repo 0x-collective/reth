@@ -134,6 +134,11 @@ where
         }
     }
 
+    /// custom function to allow removing mined txs from the txpool
+    pub fn canon_state_change(&self, event: CanonicalStateUpdate) -> () {
+        self.pool.write().canon_state_change(event)
+    }
+
     /// Returns stats about the size of the pool.
     pub(crate) fn size(&self) -> PoolSize {
         self.pool.read().size()
