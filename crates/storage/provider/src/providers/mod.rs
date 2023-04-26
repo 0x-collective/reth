@@ -1,8 +1,8 @@
 use crate::{
     BlockHashProvider, BlockIdProvider, BlockProvider, BlockchainTreePendingStateProvider,
-    CanonStateNotifications, CanonStateSubscriptions, EvmEnvProvider, HeaderProvider, PostState,
+    CanonStateNotifications, CanonStateSubscriptions, EvmEnvProvider, HeaderProvider,
     PostStateDataProvider, ReceiptProvider, StateProviderBox, StateProviderFactory,
-    StateRootProvider, TransactionsProvider, WithdrawalsProvider,
+    TransactionsProvider, WithdrawalsProvider,
 };
 use reth_db::database::Database;
 use reth_interfaces::{
@@ -27,6 +27,7 @@ use std::{
 mod database;
 mod post_state_provider;
 mod state;
+use crate::traits::BlockSource;
 pub use database::*;
 pub use post_state_provider::PostStateProvider;
 
@@ -99,6 +100,10 @@ where
         self.database.chain_info()
     }
 
+    fn best_block_number(&self) -> Result<BlockNumber> {
+        self.database.best_block_number()
+    }
+
     fn convert_block_number(&self, num: BlockNumberOrTag) -> Result<Option<BlockNumber>> {
         let num = match num {
             BlockNumberOrTag::Latest => self.chain_info()?.best_number,
@@ -136,6 +141,25 @@ where
     DB: Database,
     Tree: BlockchainTreeViewer + Send + Sync,
 {
+    fn find_block_by_hash(&self, hash: H256, source: BlockSource) -> Result<Option<Block>> {
+        let block = match source {
+            BlockSource::Any => {
+                // check pending source first
+                // Note: it's fine to return the unsealed block because the caller already has the
+                // hash
+                let mut block = self.tree.block_by_hash(hash).map(|block| block.unseal());
+                if block.is_none() {
+                    block = self.database.block_by_hash(hash)?;
+                }
+                block
+            }
+            BlockSource::Pending => self.tree.block_by_hash(hash).map(|block| block.unseal()),
+            BlockSource::Database => self.database.block_by_hash(hash)?,
+        };
+
+        Ok(block)
+    }
+
     fn block(&self, id: BlockId) -> Result<Option<Block>> {
         self.database.block(id)
     }
@@ -270,6 +294,16 @@ where
         self.database.history_by_block_hash(block_hash)
     }
 
+    fn state_by_block_hash(&self, block: BlockHash) -> Result<StateProviderBox<'_>> {
+        // check tree first
+        if let Some(pending) = self.tree.find_pending_state_provider(block) {
+            return self.pending_with_provider(pending)
+        }
+
+        // not found in tree, check database
+        self.history_by_block_hash(block)
+    }
+
     /// Storage provider for pending state.
     fn pending(&self) -> Result<StateProviderBox<'_>> {
         if let Some(block) = self.tree.pending_block() {
@@ -287,16 +321,6 @@ where
         let state_provider = self.history_by_block_hash(canonical_fork.hash)?;
         let post_state_provider = PostStateProvider::new(state_provider, post_state_data);
         Ok(Box::new(post_state_provider))
-    }
-}
-
-impl<DB, Tree> StateRootProvider for BlockchainProvider<DB, Tree>
-where
-    DB: Database,
-    Tree: Send + Sync,
-{
-    fn state_root(&self, post_state: &PostState) -> Result<H256> {
-        self.database.state_root(post_state)
     }
 }
 
@@ -361,11 +385,11 @@ where
     DB: Send + Sync,
     Tree: BlockchainTreePendingStateProvider,
 {
-    fn pending_state_provider(
+    fn find_pending_state_provider(
         &self,
         block_hash: BlockHash,
-    ) -> Result<Box<dyn PostStateDataProvider>> {
-        self.tree.pending_state_provider(block_hash)
+    ) -> Option<Box<dyn PostStateDataProvider>> {
+        self.tree.find_pending_state_provider(block_hash)
     }
 }
 

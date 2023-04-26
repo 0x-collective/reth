@@ -1,11 +1,11 @@
 use crate::{
     providers::state::{historical::HistoricalStateProvider, latest::LatestStateProvider},
-    traits::ReceiptProvider,
-    BlockHashProvider, BlockIdProvider, BlockProvider, EvmEnvProvider, HeaderProvider, PostState,
-    ProviderError, StateProviderBox, StateRootProvider, TransactionsProvider, WithdrawalsProvider,
+    traits::{BlockSource, ReceiptProvider},
+    BlockHashProvider, BlockIdProvider, BlockProvider, EvmEnvProvider, HeaderProvider,
+    ProviderError, StateProviderBox, TransactionsProvider, WithdrawalsProvider,
 };
 use reth_db::{cursor::DbCursorRO, database::Database, tables, transaction::DbTx};
-use reth_interfaces::{Error, Result};
+use reth_interfaces::Result;
 use reth_primitives::{
     Block, BlockHash, BlockId, BlockNumber, ChainInfo, ChainSpec, Hardfork, Head, Header, Receipt,
     TransactionMeta, TransactionSigned, TxHash, TxNumber, Withdrawal, H256, U256,
@@ -139,13 +139,17 @@ impl<DB: Database> BlockHashProvider for ShareableDatabase<DB> {
 
 impl<DB: Database> BlockIdProvider for ShareableDatabase<DB> {
     fn chain_info(&self) -> Result<ChainInfo> {
-        let best_number = self
+        let best_number = self.best_block_number()?;
+        let best_hash = self.block_hash(best_number)?.unwrap_or_default();
+        Ok(ChainInfo { best_hash, best_number, last_finalized: None, safe_finalized: None })
+    }
+
+    fn best_block_number(&self) -> Result<BlockNumber> {
+        Ok(self
             .db
             .view(|tx| tx.get::<tables::SyncStage>("Finish".to_string()))?
             .map_err(Into::<reth_interfaces::db::Error>::into)?
-            .unwrap_or_default();
-        let best_hash = self.block_hash(best_number)?.unwrap_or_default();
-        Ok(ChainInfo { best_hash, best_number, last_finalized: None, safe_finalized: None })
+            .unwrap_or_default())
     }
 
     fn block_number(&self, hash: H256) -> Result<Option<BlockNumber>> {
@@ -154,6 +158,14 @@ impl<DB: Database> BlockIdProvider for ShareableDatabase<DB> {
 }
 
 impl<DB: Database> BlockProvider for ShareableDatabase<DB> {
+    fn find_block_by_hash(&self, hash: H256, source: BlockSource) -> Result<Option<Block>> {
+        if source.is_database() {
+            self.block(hash.into())
+        } else {
+            Ok(None)
+        }
+    }
+
     fn block(&self, id: BlockId) -> Result<Option<Block>> {
         if let Some(number) = self.block_number_for_id(id)? {
             if let Some(header) = self.header_by_number(number)? {
@@ -437,16 +449,6 @@ impl<DB: Database> EvmEnvProvider for ShareableDatabase<DB> {
             self.header_td_by_number(header.number)?.ok_or(ProviderError::HeaderNotFound)?;
         fill_cfg_env(cfg, &self.chain_spec, header, total_difficulty);
         Ok(())
-    }
-}
-
-impl<DB> StateRootProvider for ShareableDatabase<DB>
-where
-    DB: Database,
-{
-    fn state_root(&self, post_state: &PostState) -> Result<H256> {
-        let tx = self.db.tx()?;
-        post_state.state_root_slow(&tx).map_err(|err| Error::Database(err.into()))
     }
 }
 
