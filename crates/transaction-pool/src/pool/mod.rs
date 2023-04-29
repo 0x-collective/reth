@@ -142,8 +142,13 @@ where
     }
 
     /// custom function to allow removing mined txs from the txpool
-    pub fn canon_state_change(&self, event: CanonicalStateUpdate) -> () {
-        self.pool.write().canon_state_change(event)
+    pub fn canon_state_change(
+        &self,
+        block_info: BlockInfo,
+        mined_transactions: Vec<TxHash>,
+        changed_senders: HashMap<SenderId, SenderInfo>,
+    ) {
+        self.pool.write().canon_state_change(block_info, mined_transactions, changed_senders)
     }
 
     /// Returns stats about the size of the pool.
