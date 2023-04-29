@@ -515,7 +515,10 @@ where
                 .sessions_mut()
                 .send_message(&peer_id, PeerMessage::PooledTransactions(msg)),
             NetworkHandleMessage::AddPeerAddress(peer, kind, addr) => {
-                self.swarm.state_mut().add_peer_kind(peer, kind, addr);
+                // only add peer if we are not shutting down
+                if !self.swarm.is_shutting_down() {
+                    self.swarm.state_mut().add_peer_kind(peer, kind, addr);
+                }
             }
             NetworkHandleMessage::RemovePeer(peer_id, kind) => {
                 self.swarm.state_mut().remove_peer(peer_id, kind);
@@ -653,7 +656,7 @@ where
                             info!(
                                 target : "net",
                                 ?remote_addr,
-                                client_version,
+                                %client_version,
                                 ?peer_id,
                                 ?total_active,
                                 "Session established"
@@ -731,6 +734,10 @@ where
                             if let Some(reason) = reason {
                                 this.disconnect_metrics.increment(reason);
                             }
+                            this.metrics.backed_off_peers.set(
+                                this.swarm.state().peers().num_backed_off_peers().saturating_sub(1)
+                                    as f64,
+                            );
                             this.event_listeners
                                 .send(NetworkEvent::SessionClosed { peer_id, reason });
                         }
@@ -761,6 +768,10 @@ where
                             this.metrics
                                 .incoming_connections
                                 .set(this.swarm.state().peers().num_inbound_connections() as f64);
+                            this.metrics.backed_off_peers.set(
+                                this.swarm.state().peers().num_backed_off_peers().saturating_sub(1)
+                                    as f64,
+                            );
                         }
                         SwarmEvent::OutgoingPendingSessionClosed {
                             remote_addr,
@@ -795,6 +806,10 @@ where
                             this.metrics
                                 .outgoing_connections
                                 .set(this.swarm.state().peers().num_outbound_connections() as f64);
+                            this.metrics.backed_off_peers.set(
+                                this.swarm.state().peers().num_backed_off_peers().saturating_sub(1)
+                                    as f64,
+                            );
                         }
                         SwarmEvent::OutgoingConnectionError { remote_addr, peer_id, error } => {
                             trace!(
@@ -814,6 +829,10 @@ where
                             this.metrics
                                 .outgoing_connections
                                 .set(this.swarm.state().peers().num_outbound_connections() as f64);
+                            this.metrics.backed_off_peers.set(
+                                this.swarm.state().peers().num_backed_off_peers().saturating_sub(1)
+                                    as f64,
+                            );
                         }
                         SwarmEvent::BadMessage { peer_id } => {
                             this.swarm.state_mut().peers_mut().apply_reputation_change(
@@ -865,7 +884,7 @@ pub enum NetworkEvent {
         /// The remote addr of the peer to which a session was established.
         remote_addr: SocketAddr,
         /// The client version of the peer to which a session was established.
-        client_version: String,
+        client_version: Arc<String>,
         /// Capabilities the peer announced
         capabilities: Arc<Capabilities>,
         /// A request channel to the session task.

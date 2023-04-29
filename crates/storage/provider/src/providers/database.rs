@@ -16,6 +16,7 @@ use reth_revm_primitives::{
     primitives::{BlockEnv, CfgEnv, SpecId},
 };
 use std::{ops::RangeBounds, sync::Arc};
+use tracing::trace;
 
 /// A common provider that fetches data from a database.
 ///
@@ -44,6 +45,7 @@ impl<DB: Clone> Clone for ShareableDatabase<DB> {
 impl<DB: Database> ShareableDatabase<DB> {
     /// Storage provider for latest block
     pub fn latest(&self) -> Result<StateProviderBox<'_>> {
+        trace!(target: "providers::db", "Returning latest state provider");
         Ok(Box::new(LatestStateProvider::new(self.db.tx()?)))
     }
 
@@ -54,9 +56,14 @@ impl<DB: Database> ShareableDatabase<DB> {
     ) -> Result<StateProviderBox<'_>> {
         let tx = self.db.tx()?;
 
+        if is_latest_block_number(&tx, block_number)? {
+            return Ok(Box::new(LatestStateProvider::new(tx)))
+        }
+
         // +1 as the changeset that we want is the one that was applied after this block.
         block_number += 1;
 
+        trace!(target: "providers::db", ?block_number, "Returning historical state provider for block number");
         Ok(Box::new(HistoricalStateProvider::new(tx, block_number)))
     }
 
@@ -68,10 +75,15 @@ impl<DB: Database> ShareableDatabase<DB> {
             .get::<tables::HeaderNumbers>(block_hash)?
             .ok_or(ProviderError::BlockHash { block_hash })?;
 
+        if is_latest_block_number(&tx, block_number)? {
+            return Ok(Box::new(LatestStateProvider::new(tx)))
+        }
+
         // +1 as the changeset that we want is the one that was applied after this block.
         // as the  changeset contains old values.
         block_number += 1;
 
+        trace!(target: "providers::db", ?block_hash, "Returning historical state provider for block hash");
         Ok(Box::new(HistoricalStateProvider::new(tx, block_number)))
     }
 }
@@ -145,11 +157,7 @@ impl<DB: Database> BlockIdProvider for ShareableDatabase<DB> {
     }
 
     fn best_block_number(&self) -> Result<BlockNumber> {
-        Ok(self
-            .db
-            .view(|tx| tx.get::<tables::SyncStage>("Finish".to_string()))?
-            .map_err(Into::<reth_interfaces::db::Error>::into)?
-            .unwrap_or_default())
+        Ok(self.db.view(|tx| best_block_number(tx))??.unwrap_or_default())
     }
 
     fn block_number(&self, hash: H256) -> Result<Option<BlockNumber>> {
@@ -450,6 +458,44 @@ impl<DB: Database> EvmEnvProvider for ShareableDatabase<DB> {
         fill_cfg_env(cfg, &self.chain_spec, header, total_difficulty);
         Ok(())
     }
+}
+
+/// Fetches checks if the block number is the latest block number.
+#[inline]
+fn is_latest_block_number<'a, TX>(
+    tx: &TX,
+    block_number: BlockNumber,
+) -> std::result::Result<bool, reth_interfaces::db::Error>
+where
+    TX: DbTx<'a> + Send + Sync,
+{
+    // check if the block number is the best block number
+    // there's always at least one header in the database (genesis)
+    let best = best_block_number(tx)?.unwrap_or_default();
+    let last = last_canonical_header(tx)?.map(|(last, _)| last).unwrap_or_default();
+    Ok(block_number == best && block_number == last)
+}
+
+/// Fetches the best block number from the database.
+#[inline]
+fn best_block_number<'a, TX>(
+    tx: &TX,
+) -> std::result::Result<Option<BlockNumber>, reth_interfaces::db::Error>
+where
+    TX: DbTx<'a> + Send + Sync,
+{
+    tx.get::<tables::SyncStage>("Finish".to_string())
+}
+
+/// Fetches the last canonical header from the database.
+#[inline]
+fn last_canonical_header<'a, TX>(
+    tx: &TX,
+) -> std::result::Result<Option<(BlockNumber, BlockHash)>, reth_interfaces::db::Error>
+where
+    TX: DbTx<'a> + Send + Sync,
+{
+    tx.cursor_read::<tables::CanonicalHeaders>()?.last()
 }
 
 #[cfg(test)]

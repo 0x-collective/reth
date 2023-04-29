@@ -249,18 +249,15 @@ pub fn validate_header_regarding_parent(
     }
 
     // timestamp in past check
-    if child.timestamp < parent.timestamp {
+    if child.timestamp <= parent.timestamp {
         return Err(ConsensusError::TimestampIsInPast {
             parent_timestamp: parent.timestamp,
             timestamp: child.timestamp,
         })
     }
 
-    // difficulty check is done by consensus.
-    // TODO(onbjerg): Unsure what the check here is supposed to be, but it should be moved to
-    // [BeaconConsensus]. if chain_spec.paris_status().block_number() > Some(child.number) {
-    //    // TODO how this needs to be checked? As ice age did increment it by some formula
-    //}
+    // TODO Check difficulty increment between parent and child
+    // Ace age did increment it by some formula that we need to follow.
 
     let mut parent_gas_limit = parent.gas_limit;
 
@@ -536,6 +533,7 @@ mod tests {
         parent.gas_limit = 30000000;
         parent.base_fee_per_gas = Some(0x28041f7f5);
         parent.number -= 1;
+        parent.timestamp -= 1;
 
         let ommers = Vec::new();
         let body = Vec::new();

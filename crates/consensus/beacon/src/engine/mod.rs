@@ -248,7 +248,7 @@ where
         state: ForkchoiceState,
         attrs: Option<PayloadAttributes>,
     ) -> Result<OnForkChoiceUpdated, BeaconEngineError> {
-        trace!(target: "consensus::engine", ?state, "Received new forkchoice state");
+        trace!(target: "consensus::engine", ?state, "Received new forkchoice state update");
         if state.head_block_hash.is_zero() {
             return Ok(OnForkChoiceUpdated::invalid_state())
         }
@@ -325,7 +325,7 @@ where
     fn process_payload_attributes(
         &self,
         attrs: PayloadAttributes,
-        header: Header,
+        head: Header,
         state: ForkchoiceState,
     ) -> OnForkChoiceUpdated {
         // 7. Client software MUST ensure that payloadAttributes.timestamp is
@@ -334,7 +334,7 @@ where
         //    software MUST respond with -38003: `Invalid payload attributes` and
         //    MUST NOT begin a payload build process. In such an event, the
         //    forkchoiceState update MUST NOT be rolled back.
-        if attrs.timestamp <= header.timestamp.into() {
+        if attrs.timestamp <= head.timestamp.into() {
             return OnForkChoiceUpdated::invalid_payload_attributes()
         }
 
@@ -343,7 +343,7 @@ where
         //    if payloadAttributes is not null and the forkchoice state has been
         //    updated successfully. The build process is specified in the Payload
         //    building section.
-        let attributes = PayloadBuilderAttributes::new(header.parent_hash, attrs);
+        let attributes = PayloadBuilderAttributes::new(state.head_block_hash, attrs);
 
         // send the payload to the builder and return the receiver for the pending payload id,
         // initiating payload job is handled asynchronously
@@ -389,7 +389,7 @@ where
 
         let status = if self.is_pipeline_idle() {
             let block_hash = block.hash;
-            match self.blockchain_tree.insert_block(block) {
+            match self.blockchain_tree.insert_block_without_senders(block) {
                 Ok(status) => {
                     let latest_valid_hash =
                         matches!(status, BlockStatus::Valid).then_some(block_hash);
@@ -404,15 +404,16 @@ where
                     let latest_valid_hash =
                         matches!(error, Error::Execution(ExecutorError::BlockPreMerge { .. }))
                             .then_some(H256::zero());
-                    let status = match error {
-                        Error::Execution(ExecutorError::PendingBlockIsInFuture { .. }) => {
-                            PayloadStatusEnum::Syncing
-                        }
-                        error => PayloadStatusEnum::Invalid { validation_error: error.to_string() },
-                    };
+                    let status = PayloadStatusEnum::Invalid { validation_error: error.to_string() };
                     PayloadStatus::new(status, latest_valid_hash)
                 }
             }
+        } else if let Err(error) = self.blockchain_tree.buffer_block_without_sender(block) {
+            let latest_valid_hash =
+                matches!(error, Error::Execution(ExecutorError::BlockPreMerge { .. }))
+                    .then_some(H256::zero());
+            let status = PayloadStatusEnum::Invalid { validation_error: error.to_string() };
+            PayloadStatus::new(status, latest_valid_hash)
         } else {
             PayloadStatus::from_status(PayloadStatusEnum::Syncing)
         };
@@ -751,7 +752,7 @@ mod tests {
 
         // Setup blockchain tree
         let externals = TreeExternals::new(db.clone(), consensus, executor_factory, chain_spec);
-        let config = BlockchainTreeConfig::new(1, 2, 3);
+        let config = BlockchainTreeConfig::new(1, 2, 3, 2);
         let (canon_state_notification_sender, _) = tokio::sync::broadcast::channel(3);
         let tree = ShareableBlockchainTree::new(
             BlockchainTree::new(externals, canon_state_notification_sender, config)
