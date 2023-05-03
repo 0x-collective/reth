@@ -63,6 +63,11 @@ impl TransactionsHandle {
     pub fn propagate(&self, hash: TxHash) {
         self.send(TransactionsCommand::PropagateHash(hash))
     }
+
+    /// blast a tx to all that have not heard it
+    pub fn blast_tx(&self, tx: Arc<TransactionSigned>) {
+        self.send(TransactionsCommand::BlastTx(tx))
+    }
 }
 
 /// Manages transactions on top of the p2p network.
@@ -272,6 +277,48 @@ where
         propagated
     }
 
+    fn on_blast_tx(&mut self, tx: Arc<TransactionSigned>) {
+        if self.network.is_syncing() {
+            return
+        }
+
+        trace!(target: "net::tx", "so i started blasting...");
+
+        let tx = PropagateTransaction::new(tx);
+        let propagated = self.blast_tx(tx);
+
+        // notify pool so events get fired
+        self.pool.on_propagated(propagated);
+    }
+
+    /// custom function which sends full txs to all peers as long as they don't know about it.
+    fn blast_tx(&mut self, tx: PropagateTransaction) -> PropagatedTransactions {
+        let mut propagated = PropagatedTransactions::default();
+        for (peer_id, peer) in self.peers.iter_mut() {
+            // filter all transactions unknown to the peer
+            let mut hashes = PooledTransactionsHashesBuilder::new(peer.version);
+            let mut full_transactions = FullTransactionsBuilder::default();
+
+            if peer.transactions.insert(tx.hash()) {
+                hashes.push(&tx);
+                full_transactions.push(&tx);
+            }
+
+            let new_pooled_hashes = hashes.build();
+            if !new_pooled_hashes.is_empty() {
+                self.network.send_transactions(*peer_id, full_transactions.build());
+
+                for hash in new_pooled_hashes.into_iter_hashes() {
+                    propagated.0.entry(hash).or_default().push(PropagateKind::Full(*peer_id));
+                }
+            }
+        }
+
+        self.metrics.propagated_transactions.increment(propagated.0.len() as u64);
+
+        propagated
+    }
+
     /// Request handler for an incoming `NewPooledTransactionHashes`
     fn on_new_pooled_transaction_hashes(
         &mut self,
@@ -339,6 +386,7 @@ where
             TransactionsCommand::PropagateHash(hash) => {
                 self.on_new_transactions(std::iter::once(hash))
             }
+            TransactionsCommand::BlastTx(tx) => self.on_blast_tx(tx),
         }
     }
 
@@ -696,6 +744,7 @@ struct Peer {
 /// Commands to send to the [`TransactionsManager`](crate::transactions::TransactionsManager)
 enum TransactionsCommand {
     PropagateHash(H256),
+    BlastTx(Arc<TransactionSigned>),
 }
 
 /// All events related to transactions emitted by the network.
