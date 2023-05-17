@@ -6,14 +6,13 @@ use clap::{crate_version, Parser};
 use eyre::Context;
 use futures::{Stream, StreamExt};
 use reth_beacon_consensus::BeaconConsensus;
-use reth_db::mdbx::{Env, WriteMap};
+
+use reth_db::database::Database;
 use reth_downloaders::{
     bodies::bodies::BodiesDownloaderBuilder,
     headers::reverse_headers::ReverseHeadersDownloaderBuilder, test_utils::FileClient,
 };
-use reth_interfaces::{
-    consensus::Consensus, p2p::headers::client::NoopStatusUpdater, sync::SyncStateUpdater,
-};
+use reth_interfaces::consensus::Consensus;
 use reth_primitives::{ChainSpec, H256};
 use reth_staged_sync::{
     utils::{
@@ -24,7 +23,10 @@ use reth_staged_sync::{
 };
 use reth_stages::{
     prelude::*,
-    stages::{ExecutionStage, HeaderSyncMode, SenderRecoveryStage, TotalDifficultyStage},
+    stages::{
+        ExecutionStage, ExecutionStageThresholds, HeaderSyncMode, SenderRecoveryStage,
+        TotalDifficultyStage,
+    },
 };
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::watch;
@@ -106,7 +108,7 @@ impl ImportCommand {
         info!(target: "reth::cli", "Chain file imported");
 
         let (mut pipeline, events) =
-            self.build_import_pipeline(config, db.clone(), &consensus, file_client).await?;
+            self.build_import_pipeline(config, db, &consensus, file_client).await?;
 
         // override the tip
         pipeline.set_tip(tip);
@@ -117,7 +119,7 @@ impl ImportCommand {
         // Run pipeline
         info!(target: "reth::cli", "Starting sync pipeline");
         tokio::select! {
-            res = pipeline.run(db.clone()) => res?,
+            res = pipeline.run() => res?,
             _ = tokio::signal::ctrl_c() => {},
         };
 
@@ -125,14 +127,15 @@ impl ImportCommand {
         Ok(())
     }
 
-    async fn build_import_pipeline<C>(
+    async fn build_import_pipeline<DB, C>(
         &self,
         config: Config,
-        db: Arc<Env<WriteMap>>,
+        db: DB,
         consensus: &Arc<C>,
         file_client: Arc<FileClient>,
-    ) -> eyre::Result<(Pipeline<Env<WriteMap>, impl SyncStateUpdater>, impl Stream<Item = NodeEvent>)>
+    ) -> eyre::Result<(Pipeline<DB>, impl Stream<Item = NodeEvent>)>
     where
+        DB: Database + Clone + Unpin + 'static,
         C: Consensus + 'static,
     {
         if !file_client.has_canonical_blocks() {
@@ -144,7 +147,7 @@ impl ImportCommand {
             .into_task();
 
         let body_downloader = BodiesDownloaderBuilder::from(config.stages.bodies)
-            .build(file_client.clone(), consensus.clone(), db)
+            .build(file_client.clone(), consensus.clone(), db.clone())
             .into_task();
 
         let (tip_tx, tip_rx) = watch::channel(H256::zero());
@@ -154,14 +157,12 @@ impl ImportCommand {
             .with_tip_sender(tip_tx)
             // we want to sync all blocks the file client provides or 0 if empty
             .with_max_block(file_client.max_block().unwrap_or(0))
-            .with_sync_state_updater(file_client)
             .add_stages(
                 DefaultStages::new(
                     HeaderSyncMode::Tip(tip_rx),
                     consensus.clone(),
                     header_downloader,
                     body_downloader,
-                    NoopStatusUpdater::default(),
                     factory.clone(),
                 )
                 .set(
@@ -171,9 +172,16 @@ impl ImportCommand {
                 .set(SenderRecoveryStage {
                     commit_threshold: config.stages.sender_recovery.commit_threshold,
                 })
-                .set(ExecutionStage::new(factory, config.stages.execution.commit_threshold)),
+                .set(ExecutionStage::new(
+                    factory,
+                    ExecutionStageThresholds {
+                        max_blocks: config.stages.execution.max_blocks,
+                        max_changes: config.stages.execution.max_changes,
+                        max_changesets: config.stages.execution.max_changesets,
+                    },
+                )),
             )
-            .build();
+            .build(db);
 
         let events = pipeline.events().map(Into::into);
 

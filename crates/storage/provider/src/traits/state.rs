@@ -1,5 +1,5 @@
 use super::AccountProvider;
-use crate::{post_state::PostState, BlockHashProvider};
+use crate::{post_state::PostState, BlockHashProvider, BlockIdProvider};
 use auto_impl::auto_impl;
 use reth_interfaces::{provider::ProviderError, Result};
 use reth_primitives::{
@@ -86,7 +86,17 @@ pub trait StateProvider:
 ///
 /// Note: the `pending` block is considered the block that extends the canonical chain but one and
 /// has the `latest` block as its parent.
-pub trait StateProviderFactory: Send + Sync {
+///
+/// All states are _inclusive_, meaning they include _all_ all changes made (executed transactions)
+/// in their respective blocks. For example [StateProviderFactory::history_by_block_number] for
+/// block number `n` will return the state after block `n` was executed (transactions, withdrawals).
+/// In other words, all states point to the end of the state's respective block, which is equivalent
+/// to state at the beginning of the child block.
+///
+/// This affects tracing, or replaying blocks, which will need to be executed on top of the state of
+/// the parent block. For example, in order to trace block `n`, the state after block `n - 1` needs
+/// to be used, since block `n` was executed on its parent block's state.
+pub trait StateProviderFactory: BlockIdProvider + Send + Sync {
     /// Storage provider for latest block.
     fn latest(&self) -> Result<StateProviderBox<'_>>;
 
@@ -98,7 +108,7 @@ pub trait StateProviderFactory: Send + Sync {
         }
     }
 
-    /// Returns a [StateProvider] indexed by the given block number or tag
+    /// Returns a [StateProvider] indexed by the given block number or tag.
     fn history_by_block_number_or_tag(
         &self,
         number_or_tag: BlockNumberOrTag,
@@ -106,10 +116,22 @@ pub trait StateProviderFactory: Send + Sync {
         match number_or_tag {
             BlockNumberOrTag::Latest => self.latest(),
             BlockNumberOrTag::Finalized => {
-                todo!()
+                // we can only get the finalized state by hash, not by num
+                let hash = match self.finalized_block_hash()? {
+                    Some(hash) => hash,
+                    None => return Err(ProviderError::HeaderNotFound.into()),
+                };
+
+                self.state_by_block_hash(hash)
             }
             BlockNumberOrTag::Safe => {
-                todo!()
+                // we can only get the safe state by hash, not by num
+                let hash = match self.safe_block_hash()? {
+                    Some(hash) => hash,
+                    None => return Err(ProviderError::HeaderNotFound.into()),
+                };
+
+                self.state_by_block_hash(hash)
             }
             BlockNumberOrTag::Earliest => self.history_by_block_number(0),
             BlockNumberOrTag::Pending => self.pending(),
